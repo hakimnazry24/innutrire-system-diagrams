@@ -16,6 +16,7 @@ const DOCS = [
   { title: 'Infrastructure — hospital-server-deployment-iac',  file: '03-hospital-server-deployment-iac.md', out: '03-hospital-server-deployment-iac.pdf' },
   { title: 'ML Research — Regression_models_innutrire',        file: '04-regression-models-innutrire.md', out: '04-regression-models-innutrire.pdf' },
   { title: 'System Overview — All Repos',                      file: '05-system-overview.md',             out: '05-system-overview.pdf' },
+  { title: 'Moniteer — Monitoring Dashboard',                  file: '06-moniteer.md',                    out: '06-moniteer.pdf' },
 ];
 
 // Decode the HTML entities that marked inserts inside <code> blocks.
