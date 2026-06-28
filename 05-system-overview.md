@@ -1,178 +1,129 @@
-# INNUTRIRE — System Overview Diagram
+# INNUTRIRE — System Overview
 
-> End-to-end flow from a clinician making a prediction request to the result being displayed on the ICU bedside app. Spans all four repositories.
+> End-to-end flow from a clinician requesting a prediction to the result appearing on the bedside screen.
 
 ---
 
-## Full System Architecture
+## System Architecture
 
 ```mermaid
 flowchart TD
-    subgraph CLINICIAN["👤 Clinician — ICU Bedside"]
-        TAB["Windows Tablet / PC\nRunning frontend_innutrire.exe"]
+    subgraph CLINICIAN[Clinician — ICU Bedside]
+        TAB[Tablet or PC running desktop app]
     end
 
-    subgraph FRONTEND["frontend_innutrire — PySide6 Desktop App"]
-        F_LIST["Patient List Screen"]
-        F_DASH["Patient Dashboard\n(name, bed, recent prediction, insights)"]
-        F_WIZARD["REE Calculation Wizard\n(5-step form)"]
-        F_THREAD["ApiWorker QThread\n(async HTTP calls)"]
-        F_RESULT["Result Panel\nAI REE kcal/day\nEnergy Recommendation kcal/day"]
+    subgraph APP[Desktop App]
+        LIST[Patient List]
+        DASH[Patient Dashboard]
+        WIZARD[REE Calculation Wizard]
+        RESULT[Result Display]
     end
 
-    subgraph IAC["hospital-server-deployment-iac\nUbuntu Server — 192.168.8.200"]
-        UFW["UFW Firewall\nALLOW: 22, 80, 443, 8000\nDENY: all other inbound"]
-        subgraph DOCKER["Docker Compose — app_net bridge"]
-            WEB["web container\nGunicorn 3 workers\n0.0.0.0:8000"]
-            PGDB["db container\nPostgreSQL 16-alpine\nport 5432 (internal)"]
+    subgraph SERVER[Hospital Server]
+        FW[Firewall]
+        subgraph CONTAINERS[Docker Compose]
+            API[Django REST API]
+            DB[PostgreSQL Database]
         end
-        VPN["Tailscale VPN\n(optional secure remote access)"]
+        VPN[VPN Access]
     end
 
-    subgraph BACKEND["django_backend_innutrire — Django 6 REST API"]
-        B_URLS["urls.py dispatcher"]
-        B_PV["prediction_views.py"]
-        B_GV["gold_standard_views.py"]
-        B_PAT["patient_views.py"]
-        subgraph B_ML["ML Inference — ml_model_service.py"]
-            B_PREP["prepare_data()\n• Average 3 vitals readings\n• Encode gender, BMI class, Temp class\n→ 14-column DataFrame"]
-            B_SVR["StandardScaler → SVR.predict()\n→ raw REE kcal/day"]
-            B_INJ["injury_factor.py\nrec = raw_ree × max(trauma, burns)"]
-        end
-        B_XAI["explainable_ai_views.py\nSHAP + PFI on demand"]
-        B_AGENT["agent/ — Moniteer proxy\nserver-health, patients, predictions"]
-        B_DB["PostgreSQL\nPatient, Prediction, GoldStandard"]
+    subgraph ML[ML Research — Offline]
+        TRAIN[Model Training and Evaluation]
+        MODEL[Trained Model Artifact]
     end
 
-    subgraph MLREPO["Regression_models_innutrire — ML Research (offline)"]
-        R_NB["87 Jupyter Notebooks\n10+ algorithms, 5-fold CV"]
-        R_BEST["Best Model: SVR\nRMSE=314 kcal, R²=0.42"]
-        R_SHAP["SHAP + PFI Analysis"]
-        R_EXPORT["retrain_and_export_models.py\n→ model_dict.joblib"]
-    end
+    TAB --> LIST --> DASH --> WIZARD
+    WIZARD -->|Submit measurements| FW
+    FW --> API
+    API --> DB
+    DB --> API
+    API --> FW
+    FW --> RESULT
+    RESULT --> TAB
 
-    MLREPO -->|"Manual: copy .joblib\nto innutrire/model/"| BACKEND
-
-    TAB --> F_LIST --> F_DASH --> F_WIZARD
-    F_WIZARD -->|"All 5 forms complete"| F_THREAD
-    F_THREAD -->|"POST /api/predictions\n(28 clinical fields)"| UFW
-    UFW --> WEB --> B_URLS --> B_PV
-    B_PV --> B_PREP --> B_SVR --> B_INJ
-    B_INJ --> B_DB
-    B_DB -->|"{prediction_id, value, recommendation}"| B_PV
-    B_PV --> WEB --> UFW --> F_THREAD
-
-    F_THREAD -->|"POST /api/gold-standard\n(prediction_id + IC measurements)"| UFW
-    UFW --> WEB --> B_URLS --> B_GV --> B_DB
-
-    F_THREAD -->|"finish_calculation_signal"| F_RESULT
-    F_RESULT --> TAB
-
-    WEB --> PGDB
+    ML --> MODEL
+    MODEL -->|Deployed to server| API
 ```
 
 ---
 
-## Prediction Request: Step-by-Step Sequence
+## Prediction Request — Step by Step
 
 ```mermaid
 sequenceDiagram
     actor C as Clinician
-    participant APP as Desktop App (PySide6)
-    participant W as ApiWorker (QThread)
-    participant FW as UFW Firewall
-    participant GUN as Gunicorn (web container)
-    participant DJ as Django (prediction_views)
-    participant ML as ModelService (SVR)
-    participant DB as PostgreSQL (db container)
+    participant App as Desktop App
+    participant Server as Hospital Server
+    participant API as Django API
+    participant DB as Database
 
-    C->>APP: Selects patient & opens REE Wizard
-    C->>APP: Completes Form 0 — Gold Standard (IC measurements)
-    C->>APP: Completes Form 1 — Demographics (ABW auto-calculates BMI/IBW/BSA)
-    C->>APP: Completes Form 2 — Severity Scores (APACHE/SOFA/SAPS2/NUTRIC)
-    C->>APP: Completes Form 3 — Vitals (Temp/RR/HR/TV ×3, MV)
-    C->>APP: Completes Form 4 — Injury Details (Trauma + Burns)
-    C->>APP: Clicks "Calculate"
+    C->>App: Select patient
+    C->>App: Complete 5-step measurement form
+    C->>App: Click Calculate
 
-    APP->>W: Spawn ApiWorker thread
-    W->>FW: POST /api/predictions {28 fields}
-    FW->>GUN: Allow (port 8000 open)
-    GUN->>DJ: Route to prediction_views.py
+    App->>Server: Send clinical measurements
+    Server->>API: Forward to API
+    API->>API: Feature engineering
+    API->>API: SVR model predicts REE
+    API->>API: Apply injury factor
+    API->>DB: Save prediction
+    DB-->>API: Prediction ID
+    API-->>Server: REE and recommendation
+    Server-->>App: Response
 
-    DJ->>ML: ModelService.predict(clinical_data)
-    ML->>ML: prepare_data() — feature engineering (14 columns)
-    ML->>ML: StandardScaler.transform(X)
-    ML->>ML: SVR.predict(X_scaled) → raw REE
-    ML->>ML: raw_ree × max(trauma_factor, burns_factor)
-    ML-->>DJ: {raw_ree, energy_recommendation}
+    App->>Server: Save gold standard IC measurements
+    Server->>API: Record against prediction
+    API->>DB: Save gold standard
+    DB-->>API: Confirmed
+    API-->>App: Done
 
-    DJ->>DB: Prediction.objects.create(patient_id, value, recommendation, ...28 fields)
-    DB-->>DJ: prediction record (id assigned)
-    DJ-->>GUN: JsonResponse 201 {prediction_id, value, energy_recommendation}
-    GUN-->>FW: response
-    FW-->>W: response
-
-    W->>FW: POST /api/gold-standard {prediction_id, RQ, HR, VO2, VCO2, ref_ree, ...}
-    FW->>GUN: Allow
-    GUN->>DJ: Route to gold_standard_views.py
-    DJ->>DB: GoldStandard.objects.create(prediction_id, ...)
-    DB-->>DJ: saved
-    DJ-->>GUN: 201
-    GUN-->>FW: response
-    FW-->>W: response
-
-    W-->>APP: finished signal {prediction, recommendation}
-    APP->>C: Display: AI REE = X kcal/day | Recommendation = Y kcal/day
+    App->>C: Display REE result and energy recommendation
 ```
 
 ---
 
-## Repository Roles Summary
+## Repository Roles
 
 ```mermaid
 flowchart LR
-    subgraph R1["Regression_models_innutrire"]
-        RL["Research & Training\n(offline / data science)"]
+    subgraph ML[Regression Models]
+        R1[Research and train models\noffline data science work]
     end
 
-    subgraph R2["hospital-server-deployment-iac"]
-        RL2["Infrastructure Provisioning\n(Ansible — run once per server)"]
+    subgraph IAC[Infrastructure IaC]
+        R2[Provision server\nDeploy containers]
     end
 
-    subgraph R3["django_backend_innutrire"]
-        RL3["Business Logic + ML Serving\n(always running on server)"]
+    subgraph BACKEND[Django Backend]
+        R3[Serve REST API\nRun ML inference]
     end
 
-    subgraph R4["frontend_innutrire"]
-        RL4["Clinician UI\n(desktop .exe on ICU tablet)"]
+    subgraph FRONTEND[Desktop App]
+        R4[Clinician interface\nICU bedside tablet]
     end
 
-    R1 -->|"Export .joblib model artifact"| R3
-    R2 -->|"Provision server + deploy Docker"| R3
-    R4 -->|"HTTP REST API calls"| R3
+    ML -->|Export trained model| BACKEND
+    IAC -->|Provision and deploy| BACKEND
+    FRONTEND -->|HTTP API calls| BACKEND
 ```
 
 ---
 
-## Data Flow: From Patient Vitals to REE Prediction
+## Data Flow — Vitals to Prediction
 
 ```mermaid
 flowchart TD
-    A["Clinician enters:\n• ABW, Height, Age, Gender\n• APACHE II, SOFA, SAPS2, NUTRIC\n• Temp ×3, RR ×3, HR ×3, TV ×3\n• MV (auto-calc)\n• Trauma type + severity\n• Burns type + severity"]
+    INPUT[Clinician enters\nbody weight, height, age, gender\nclinical severity scores\nvitals with multiple readings\ntrauma and burns details]
 
-    A --> B["Frontend: FilledInFormSignal\ncollects all 28 attributes"]
-    B --> C["ApiWorker: POST /api/predictions"]
-    C --> D["Django: json.loads(request.body)"]
-
-    D --> E["prepare_data():\n• avg(TV1,TV2,TV3) → mean_tidal_volume\n• avg(RR1,RR2,RR3) → mean_resp_rate\n• avg(HR1,HR2,HR3) → mean_heart_rate\n• avg(Temp1,Temp2,Temp3) → mean_temp\n• gender: M→1, F→0\n• BMI → category (one-hot 4 cols)\n• Temp → category (one-hot 3 cols)\n→ 14-column DataFrame"]
-
-    E --> F["StandardScaler.transform(X_14col)"]
-    F --> G["SVR.predict(X_scaled)\n→ raw_ree (kcal/day)"]
-    G --> H["energy_recommendation =\nraw_ree × max(trauma_factor, burns_factor)"]
-
-    H --> I["Save to DB: Prediction record"]
-    I --> J["Response: {prediction_id, value, recommendation}"]
-    J --> K["Desktop app displays result\nto clinician at bedside"]
+    INPUT --> COLLECT[App collects all measurements]
+    COLLECT --> SEND[Send to backend API]
+    SEND --> FE[Feature engineering\nAverage repeated readings\nClassify and encode fields]
+    FE --> PREDICT[SVR model predicts REE]
+    PREDICT --> ADJUST[Adjust for injury severity]
+    ADJUST --> STORE[Save to database]
+    STORE --> RETURN[Return REE value and energy recommendation]
+    RETURN --> DISPLAY[Display result to clinician]
 ```
 
 ---
@@ -181,33 +132,26 @@ flowchart TD
 
 ```mermaid
 flowchart TB
-    subgraph LAN["Hospital LAN"]
-        T1["ICU Tablet 1\n(frontend_innutrire.exe)"]
-        T2["ICU Tablet 2\n(frontend_innutrire.exe)"]
+    subgraph HOSPITAL[Hospital LAN]
+        T1[ICU Tablet]
+        T2[ICU Tablet]
     end
 
-    subgraph SERVER["On-Premise Ubuntu Server\n192.168.8.200"]
-        UFW["UFW Firewall"]
-        GUN["Gunicorn :8000"]
-        PG["PostgreSQL :5432\n(internal only)"]
-        TS["Tailscale VPN"]
+    subgraph SERVER[On-Premise Server]
+        FW[Firewall]
+        API[Django API]
+        DB[PostgreSQL]
+        VPN[Tailscale VPN]
     end
 
-    subgraph REMOTE["Remote (via Tailscale)"]
-        DEV["Developer / Admin\n(SSH + monitoring)"]
+    subgraph REMOTE[Remote Access]
+        DEV[Developer or Admin]
     end
 
-    subgraph CLOUD["GitHub"]
-        REPO1["django_backend_innutrire"]
-        REPO2["hospital-server-deployment-iac"]
-    end
-
-    T1 -->|"HTTP :8000"| UFW
-    T2 -->|"HTTP :8000"| UFW
-    UFW --> GUN
-    GUN --> PG
-    DEV -->|"Tailscale mesh"| TS
-    TS --> UFW
-    REPO1 -->|"git clone (Ansible)"| SERVER
-    REPO2 -->|"Ansible playbook\n(run on server)"| SERVER
+    T1 -->|HTTP| FW
+    T2 -->|HTTP| FW
+    FW --> API
+    API --> DB
+    DEV -->|VPN tunnel| VPN
+    VPN --> FW
 ```

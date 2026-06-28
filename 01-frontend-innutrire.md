@@ -1,163 +1,91 @@
 # frontend_innutrire — Flow Diagram
 
-> **What it is:** A PySide6 desktop application (compiled to a Windows `.exe`) that runs on bedside tablets in the ICU. Clinicians use it to register patients, enter clinical measurements, and trigger REE (Resting Energy Expenditure) predictions from the Django backend.
+> A desktop application for ICU clinicians to register patients, enter clinical measurements, and receive AI-powered REE (Resting Energy Expenditure) predictions.
 
 ---
 
-## Application Navigation & Screen Flow
+## Screen Navigation
 
 ```mermaid
 flowchart TD
-    A([run.py — QApplication Launch]) --> B[MainWindow created]
-    B --> C[Navigation: QStackedWidget initialised]
-    C --> D[SELECT_PATIENT_PAGE]
+    A([App Launch]) --> B[Patient List]
 
-    D --> E{User action}
-    E -->|Click Add Patient| F[AddNewPatientPage]
-    E -->|Click existing patient row| G[PatientDashboardPage]
+    B --> C{User action}
+    C -->|Add new patient| D[Add Patient Form]
+    C -->|Select patient| E[Patient Dashboard]
 
-    F --> F1["Fill form\n(name, RN, race, gender,\nDOB, bed_no, height)"]
-    F1 --> F2["Save →\nPOST /api/patients"]
-    F2 --> D
+    D --> D1[Fill in patient details]
+    D1 --> D2[Save patient]
+    D2 --> B
 
-    G --> G1["GET /api/patients/{id}"]
-    G --> G2["GET /api/patients/{id}/latest-prediction"]
-    G --> G3["GET /api/patients/{id}/insights"]
-    G1 & G2 & G3 --> H[Dashboard rendered]
+    E --> E1[View patient info and recent prediction]
+    E --> F{Dashboard action}
 
-    H --> I{User action}
-    I -->|REE Calculation| J[REECalculationPage]
-    I -->|History| K[REEHistoryPage]
-    I -->|Predictive Equations| L[PredictiveEquationsPage]
-    I -->|Edit| M[EditPatientPage]
-    I -->|Patient Consent| N["POST /api/patients/{id}/consent"]
+    F -->|REE Calculation| G[REE Calculation Wizard]
+    F -->|History| H[Prediction History]
+    F -->|Predictive Equations| I[Equation Comparison]
+    F -->|Edit patient| J[Edit Patient Form]
+    F -->|Record consent| K[Consent Dialog]
 ```
 
 ---
 
-## REE Calculation Wizard (5-Step Form)
+## REE Calculation Wizard
 
 ```mermaid
 flowchart TD
-    J([REECalculationPage]) --> J0
+    START([Open REE Wizard]) --> S0
 
-    J0["Form 0 — Gold Standard\n(Indirect Calorimetry)\nRQ, HR, VO2 variability,\nVCO2 variability, reference REE,\nbrand type, measurement timestamp"]
-    J0 -->|Form complete| J1
+    S0[Step 1 — Gold Standard\nIndirect calorimetry measurements]
+    S0 -->|Complete| S1
 
-    J1["Form 1 — Demographics\nInput: ABW\nAuto-calc: BMI, IBW, BSA\nRead-only: Height, Gender, Age"]
-    J1 -->|Form complete| J2
+    S1[Step 2 — Demographics\nBody weight and anthropometrics]
+    S1 -->|Complete| S2
 
-    J2["Form 2 — Severity Scores\nAPACHE II (0–74)\nSOFA (0–24)\nSAPS2 (0–163)\nNUTRIC (0–40)\n↳ Each has optional calculator modal"]
-    J2 -->|Form complete| J3
+    S2[Step 3 — Severity Scores\nAPACHE II, SOFA, SAPS2, NUTRIC]
+    S2 -->|Complete| S3
 
-    J3["Form 3 — Vital Signs (×3 readings each)\nBody Temperature °C\nRespiratory Rate bpm\nHeart Rate bpm\nTidal Volume mL\nMinute Ventilation (auto-calc)"]
-    J3 -->|Form complete| J4
+    S3[Step 4 — Vital Signs\nTemperature, heart rate, respiration, tidal volume]
+    S3 -->|Complete| S4
 
-    J4["Form 4 — Injury Details\nTrauma table: Mild / Moderate / Severe / N/A\nBurns table: Mild / Moderate / Severe / N/A\n(radio selection, one per table)"]
-    J4 -->|Form complete| J5
+    S4[Step 5 — Injury Details\nTrauma and burns severity]
+    S4 -->|Complete| S5
 
-    J5{All 5 forms complete?}
-    J5 -->|No| J2
-    J5 -->|Yes| J6[Calculate button enabled]
-    J6 --> J7([User clicks Calculate])
+    S5{All steps complete?}
+    S5 -->|No| S2
+    S5 -->|Yes| CALC[Calculate button enabled]
+    CALC --> SUBMIT([Clinician clicks Calculate])
 ```
 
 ---
 
-## Prediction Submission & Result Display
+## Prediction Submission & Result
 
 ```mermaid
 sequenceDiagram
-    participant UI as CalcResetButtons (UI)
-    participant W as ApiWorker (QThread)
-    participant PP as PredictionProvider
-    participant GP as GoldStandardProvider
-    participant API as Django Backend API
-    participant R as ResultLayout (UI)
+    actor C as Clinician
+    participant App as Desktop App
+    participant API as Backend API
 
-    UI->>W: Spawn ApiWorker thread
-    W->>PP: make_prediction(**ree_calculation_data)
-    PP->>API: POST /api/predictions
-    Note right of API: patient_id, abw, height, gender,<br/>age, bmi, ibw, bsa, apache, sofa,<br/>saps, nutric, tv1-3, rr1-3, mv,<br/>hr1-3, temp1-3, trauma_key/value,<br/>burns_key/value
-    API-->>PP: {prediction_id, value, energy_recommendation}
+    C->>App: Clicks Calculate
+    App->>API: Submit clinical measurements
+    API-->>App: REE prediction + energy recommendation
 
-    W->>GP: add_new_gold_standard(prediction_id, **gold_standard_data)
-    GP->>API: POST /api/gold-standard
-    Note right of API: prediction_id, reference_ree, RQ,<br/>HR, VO2 variability, VCO2 variability,<br/>measurement_timestamp, brand_type
-    API-->>GP: 201 Created
+    App->>API: Submit gold standard IC measurements
+    API-->>App: Confirmed
 
-    W-->>UI: finished signal → {prediction, recommendation}
-    UI->>R: finish_calculation_signal emitted
-    R->>R: Display AI REE kcal/day
-    R->>R: Display Total Energy Recommendation kcal/day
+    App->>C: Display AI REE result and recommendation
 ```
 
 ---
 
-## State Management
+## History & Comparison Views
 
 ```mermaid
 flowchart LR
-    subgraph Global["app_context (singleton)"]
-        N[navigator: Navigation]
-        T[theme: Theme]
-        S[status_bar_widget]
-    end
+    RESULT[Prediction Result] --> OPT{View options}
 
-    subgraph FormState["FilledInFormSignal (singleton)"]
-        RD["ree_calculation_data\n32 clinical attributes"]
-        GD["gold_standard_data\n7 IC measurements"]
-        FC["form_complete flags\n(5 booleans)"]
-    end
-
-    subgraph Signals
-        S1[complete_fill_in_form_signal]
-        S2[complete_fill_in_all_forms]
-        S3[finish_calculation_signal]
-        S4[enable_button_signal]
-    end
-
-    FC -->|all True| S2
-    S2 --> CalcBtn[Calculate button enabled]
-    S3 --> ResultPanel[Result panel updated]
-    S4 --> SideButtons[History / History / PE buttons enabled]
+    OPT -->|History tab| HIST[List of past predictions with timestamps]
+    OPT -->|Trend tab| TREND[Chart of REE values over time]
+    OPT -->|Predictive Equations| COMP[Side-by-side comparison table\nAI vs clinical formula estimates]
 ```
-
----
-
-## Threading Architecture
-
-```mermaid
-flowchart TD
-    MT[Main Thread — Qt Event Loop] -->|spawns| WT[ApiWorker: QThread]
-    WT -->|runs| F["_run_two_functions()"]
-    F --> P1["PredictionProvider.make_prediction()"]
-    P1 -->|HTTP| API1["POST /api/predictions"]
-    API1 -->|response| F
-    F --> P2["GoldStandardProvider.add_new_gold_standard()"]
-    P2 -->|HTTP| API2["POST /api/gold-standard"]
-    API2 -->|response| F
-    F -->|result| WT
-    WT -->|finished.emit| MT
-    MT --> UI[UI update: show result]
-    WT -->|error.emit on exception| MT
-    MT -->|error| EH[Re-enable Calculate button]
-```
-
----
-
-## API Surface Consumed
-
-| Method | Endpoint | Purpose |
-|--------|----------|---------|
-| GET | `/api/patients` | List all patients |
-| POST | `/api/patients` | Register new patient |
-| GET | `/api/patients/{id}` | Patient detail |
-| PUT | `/api/patients/{id}` | Update patient |
-| DELETE | `/api/patients/{id}` | Soft-delete patient |
-| POST | `/api/patients/{id}/consent` | Record consent |
-| GET | `/api/patients/{id}/latest-prediction` | Most recent REE result |
-| GET | `/api/patients/{id}/predictions` | All REE history |
-| GET | `/api/patients/{id}/insights` | Latest vs previous delta |
-| POST | `/api/predictions` | **Run ML inference → REE result** |
-| POST | `/api/gold-standard` | Store IC calorimetry measurement |
