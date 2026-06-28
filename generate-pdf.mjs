@@ -18,12 +18,14 @@ const DOCS = [
   { title: 'System Overview — All Repos',                      file: '05-system-overview.md',             out: '05-system-overview.pdf' },
 ];
 
-// Replace ```mermaid fenced blocks with <div class="mermaid"> before marked sees them,
-// so the content is preserved verbatim inside a raw HTML block.
-function preprocessMermaid(md) {
-  return md.replace(/```mermaid\n([\s\S]*?)```/g, (_, diagram) => {
-    return `\n<div class="mermaid">\n${diagram.trim()}\n</div>\n`;
-  });
+// Decode the HTML entities that marked inserts inside <code> blocks.
+function decodeHtmlEntities(str) {
+  return str
+    .replace(/&amp;/g,  '&')
+    .replace(/&lt;/g,   '<')
+    .replace(/&gt;/g,   '>')
+    .replace(/&#39;/g,  "'")
+    .replace(/&quot;/g, '"');
 }
 
 const CSS = `
@@ -100,7 +102,25 @@ const MERMAID_CONFIG = {
   er: { useMaxWidth: true },
 };
 
-function buildHtml(title, bodyHtml) {
+function buildHtml(title, md) {
+  // Step 1: let marked convert the full markdown → HTML normally.
+  //         Fenced ```mermaid blocks become:
+  //         <pre><code class="language-mermaid">...HTML-encoded...</code></pre>
+  //         Blank lines inside the fenced block are preserved because marked
+  //         treats the entire fenced block as one token.
+  let bodyHtml = marked.parse(md);
+
+  // Step 2: replace every mermaid code block with a <div class="mermaid">,
+  //         decoding the HTML entities marked added so the parser sees raw text.
+  bodyHtml = bodyHtml.replace(
+    /<pre><code class="language-mermaid">([\s\S]*?)<\/code><\/pre>/g,
+    (_, encoded) => `<div class="mermaid">\n${decodeHtmlEntities(encoded)}</div>`
+  );
+
+  return _wrapHtml(title, bodyHtml);
+}
+
+function _wrapHtml(title, bodyHtml) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -177,19 +197,15 @@ async function main() {
   for (const doc of DOCS) {
     process.stdout.write(`  Rendering: ${doc.title} ... `);
     const md   = readFileSync(join(__dirname, doc.file), 'utf8');
-    const pre  = preprocessMermaid(md);
-    const body = marked.parse(pre);
-    const html = buildHtml(doc.title, body);
+    const html = buildHtml(doc.title, md);
     await renderToPdf(page, html, join(PDF_DIR, doc.out));
     console.log(`done  →  pdf/${doc.out}`);
   }
 
   // ── Combined PDF (all repos concatenated) ────────────────────────────────
   process.stdout.write('\n  Rendering combined PDF ... ');
-  const combinedMd   = DOCS.map(d => readFileSync(join(__dirname, d.file), 'utf8')).join('\n\n---\n\n');
-  const combinedPre  = preprocessMermaid(combinedMd);
-  const combinedBody = marked.parse(combinedPre);
-  const combinedHtml = buildHtml('INNUTRIRE — System Diagrams (All Repos)', combinedBody);
+  const combinedMd  = DOCS.map(d => readFileSync(join(__dirname, d.file), 'utf8')).join('\n\n---\n\n');
+  const combinedHtml = buildHtml('INNUTRIRE — System Diagrams (All Repos)', combinedMd);
   await renderToPdf(page, combinedHtml, join(PDF_DIR, 'INNUTRIRE-All-Diagrams.pdf'));
   console.log('done  →  pdf/INNUTRIRE-All-Diagrams.pdf');
 
